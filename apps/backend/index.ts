@@ -1,11 +1,15 @@
 import express from 'express';
-import { CreateAvatarSchema, CreateUserSchema } from './type';
+import { CreateAvatarSchema, CreateUserSchema, SigninSchema } from './type';
 import { prisma } from './db';
 import { createImage } from './image';
 import { uuid } from 'uuidv4';
 import { generateVideo } from './video';
 import cors from "cors";
+import jwt from "jsonwebtoken";
+import bcrpt from "bcrypt";
+import middleware from './middleware';
 
+const JWT_SECRET = process.env.JWT_SECRET as string;
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -14,33 +18,82 @@ app.post("/api/v1/signup", async (req, res) => {
   const { success, data } = CreateUserSchema.safeParse(req.body);
   if (!success) {
     res.status(403).json({
-      message:"Invalid input schema"
+      message: "Invalid input schema"
     })
     return;
   }
 
-  const user = await prisma.user.create({
-    data: {
-      username: req.body.username,
-      password: req.body.password
-    }
+  const userfound = await prisma.user.findFirst({
+    where: { username: data.username }
   })
 
+  if (userfound) {
+    res.status(403).json({
+      message: "Username already exists"
+    });
+    return;
+  }
+
+  const hashedpassword = await bcrpt.hash(data.password, 10);
+
+  try {
+    const user = await prisma.user.create({
+      data: {
+        username: data.username,
+        password: hashedpassword
+      }
+    })
+    res.json({
+      id: user.id
+    })
+  } catch (e) {
+    console.log("Error while Signing up")
+    res.status(500).json({ message: "Internal server Error" })
+  }
+
+})
+
+app.post("/api/v1/signin", async (req, res) => {
+  const { success, data } = SigninSchema.safeParse(req.body);
+  if (!success) {
+    res.status(403).json({
+      message: "Invalid Input Schema"
+    })
+    return;
+  }
+
+  const userfound = await prisma.user.findFirst({
+    where: { username: data.username }
+  });
+
+  if (!userfound) {
+    res.json({
+      message: "Username not found"
+    })
+    return;
+  }
+
+  const passwordmatch = await bcrpt.compare(data.password, userfound.password);
+
+  if (!passwordmatch) {
+    res.json({
+      message: "Wrong Password"
+    });
+    return;
+  }
+
+  const token = jwt.sign({ userId: userfound.id }, JWT_SECRET);
 
   res.json({
-    id:user.id
+    message: token
   })
 })
 
-app.post("/api/v1/signin", (req, res) => {
-
-})
-
-app.post("/api/v1/avatar", async (req, res) => {
+app.post("/api/v1/avatar",middleware, async (req, res) => {
   const { success, data } = CreateAvatarSchema.safeParse(req.body);
   if (!success) {
     res.status(411).json({
-      message:"Incorrect inputs"
+      message: "Incorrect inputs"
     })
     return;
   }
@@ -56,7 +109,7 @@ app.post("/api/v1/avatar", async (req, res) => {
 
   //put in s3 and then in db
   res.json({})
-  
+
 })
 
 app.post("/api/v1/video", async (req, res) => {
@@ -71,12 +124,12 @@ app.post("/api/v1/video", async (req, res) => {
   res.json({});
 })
 
-app.get("/api/v1/video/:videoId", (req, res) => {
+app.get("/api/v1/video/:videoId",middleware, (req, res) => {
 
 })
 
-app.get("/api/v1/videos", (req, res) => {
-
+app.get("/api/v1/videos",middleware, (req, res) => {
+  res.json({})
 })
 
 app.get("/api/v1/me", (req, res) => {
